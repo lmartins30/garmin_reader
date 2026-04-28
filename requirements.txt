@@ -1,0 +1,3 @@
+fitparse
+gpxpy
+pandas
