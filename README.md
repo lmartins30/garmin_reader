@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🛡️ Garmin Health Monitor Pro
 
 Um dashboard interativo em Streamlit para visualização de métricas de saúde e performance sincronizadas diretamente da nuvem do Garmin Connect.
@@ -52,3 +53,7 @@ Um dashboard interativo em Streamlit para visualização de métricas de saúde 
 
 ---
 *Desenvolvido com auxílio do Gemini CLI.*
+=======
+# garmin_reader
+Streamlit app with garmin data for deep analysis
+>>>>>>> e6014c7936def4ea54cd33304165903e10b5126a
