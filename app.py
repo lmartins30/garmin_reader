@@ -1,8 +1,10 @@
 import os
+import json
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from garmin_client import run_cloud_sync
 
 # Configuração da Página
 st.set_page_config(page_title="Garmin Health Monitor Pro", layout="wide")
@@ -14,6 +16,9 @@ COLOR_GRAY_DARK = "#333333"
 COLOR_TEAL = "#008080"
 COLOR_GOLD = "#FFD700"
 
+DATA_PATH = os.path.join("data", "saude_cloud.csv")
+PROFILE_PATH = os.path.join("data", "profile.json")
+
 st.markdown(f"""
     <style>
     .main {{ background-color: #f0f2f6; }}
@@ -23,14 +28,6 @@ st.markdown(f"""
 
 
 def load_data(file_path):
-    """Carrega dados do CSV e formata a coluna de data.
-
-    Args:
-        file_path (str): Caminho para o arquivo CSV.
-
-    Returns:
-        pd.DataFrame: DataFrame processado ou vazio.
-    """
     if os.path.exists(file_path):
         df = pd.read_csv(file_path)
         if 'date' in df.columns:
@@ -38,17 +35,46 @@ def load_data(file_path):
         return df.sort_values('date', ascending=False).fillna(0)
     return pd.DataFrame()
 
+def load_profile():
+    if os.path.exists(PROFILE_PATH):
+        with open(PROFILE_PATH, 'r') as f:
+            return json.load(f)
+    return {}
 
-def sync_cloud():
-    """Aciona o script de sincronização com o Garmin Connect."""
-    st.sidebar.text("Conectando ao Garmin Cloud...")
-    os.system(f".\\garmin_reader\\.venv\\Scripts\\python.exe .\\garmin_reader\\garmin_client.py")
+def sync_cloud(start_date=None, days=None):
+    with st.spinner("Sincronizando com Garmin Cloud..."):
+        run_cloud_sync(start_date=start_date, days=days)
     st.rerun()
 
 
 # --- CARREGAMENTO ---
-df_saude = load_data("saude_cloud.csv")
+df_saude = load_data(DATA_PATH)
+profile = load_profile()
 
+# --- SIDEBAR ---
+with st.sidebar:
+    if profile:
+        with st.expander(f"👤 {profile.get('full_name', 'Perfil')}", expanded=True):
+            if profile.get('weight'):
+                st.write(f"⚖️ **Peso:** {profile.get('weight')} kg")
+            if profile.get('fitness_age'):
+                st.write(f"🎂 **Idade Fitness:** {int(profile.get('fitness_age'))} anos")
+            st.write(f"🌍 **Sistema:** {profile.get('unit_system', 'Métrico')}")
+    
+    st.header("Status de Dados")
+    if not df_saude.empty:
+        last_date_dt = df_saude['date'].max()
+        st.info(f"📅 Dados até: **{last_date_dt.strftime('%d/%m/%Y')}**")
+        
+        if st.button("🔄 Sincronizar Novos Dados", use_container_width=True):
+            # Busca do último dia que temos até hoje
+            sync_cloud(start_date=last_date_dt)
+    else:
+        st.warning("Nenhum dado encontrado.")
+        if st.button("🚀 Sincronização Inicial", use_container_width=True):
+            sync_cloud(days=14)
+
+# --- CONTEÚDO PRINCIPAL ---
 st.title("🛡️ Garmin Health Monitor Pro")
 
 if not df_saude.empty:

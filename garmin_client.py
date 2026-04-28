@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
@@ -21,31 +22,59 @@ class GarminCloudClient:
         """Inicializa o cliente com credenciais do ambiente."""
         self.email = os.getenv("GARMIN_EMAIL")
         self.password = os.getenv("GARMIN_PASSWORD")
+        self.token_file = os.path.join("data", "session_token.json")
         self.client = None
 
     def login(self):
-        """Realiza o login na API do Garmin Connect.
-
-        Returns:
-            bool: True se o login for bem-sucedido, False caso contrário.
-        """
+        """Realiza o login na API do Garmin Connect usando cache se disponível."""
         try:
+            os.makedirs("data", exist_ok=True)
             self.client = Garmin(self.email, self.password)
+            
+            # Tenta carregar sessão do arquivo
+            if os.path.exists(self.token_file):
+                try:
+                    with open(self.token_file, 'r') as f:
+                        token_data = json.load(f)
+                    self.client.login(token_data)
+                    logging.info("Login realizado via cache de sessão.")
+                    return True
+                except Exception as e:
+                    logging.warning(f"Não foi possível usar o cache: {e}. Tentando novo login...")
+
+            # Se não houver cache ou falhar, faz login normal
             self.client.login()
+            
+            # Salva a nova sessão (tenta atributos comuns dependendo da versão da lib)
+            session = getattr(self.client, 'session_data', getattr(self.client, 'login_data', None))
+            if session:
+                with open(self.token_file, 'w') as f:
+                    json.dump(session, f)
+                logging.info("Novo login realizado e sessão salva.")
+            
             return True
         except Exception as e:
             logging.error(f"Erro ao fazer login: {e}")
             return False
 
+    def get_user_info(self):
+        """Busca informações básicas do perfil e métricas físicas."""
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            summary = self.client.get_user_summary(today)
+            return {
+                "full_name": self.client.get_full_name(),
+                "display_name": self.client.display_name,
+                "fitness_age": summary.get("fitnessAge"),
+                "weight": round(summary.get("weight", 0) / 1000, 1) if summary.get("weight") else None,
+                "unit_system": self.client.get_unit_system()
+            }
+        except Exception as e:
+            logging.error(f"Erro ao buscar info de perfil: {e}")
+            return {"full_name": self.client.get_full_name() if self.client else "Usuário"}
+
     def get_daily_stats(self, date=None):
-        """Busca métricas de saúde e sono para uma data específica.
-
-        Args:
-            date (str, optional): Data no formato YYYY-MM-DD. Default é hoje.
-
-        Returns:
-            dict: Dicionário contendo as métricas processadas ou None em caso de erro.
-        """
+        """Busca métricas de saúde e sono para uma data específica."""
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
 
@@ -57,7 +86,6 @@ class GarminCloudClient:
 
             sleep_dto = sleep.get('dailySleepDTO', {})
 
-            # Cálculo de Intensidade (Minutos Vigorosos valem o dobro)
             mod = stats.get('moderateIntensityMinutes', 0) or 0
             vig = stats.get('vigorousIntensityMinutes', 0) or 0
             total_intensity = mod + (vig * 2)
@@ -96,40 +124,52 @@ class GarminCloudClient:
             logging.error(f"Erro ao buscar stats de {date}: {e}")
             return None
 
-    def get_activities(self, limit=30):
-        """Busca as últimas atividades sincronizadas na nuvem.
-
-        Args:
-            limit (int): Número máximo de atividades a retornar.
-
-        Returns:
-            pd.DataFrame: DataFrame com o histórico de atividades.
-        """
-        try:
-            activities = self.client.get_activities(0, limit)
-            return pd.DataFrame(activities)
-        except Exception as e:
-            logging.error(f"Erro ao buscar atividades: {e}")
-            return pd.DataFrame()
-
-
-def run_cloud_sync():
-    """Executa o fluxo de sincronização completa dos últimos 14 dias."""
+def run_cloud_sync(start_date=None, days=None):
+    """Executa o fluxo de sincronização."""
     client = GarminCloudClient()
     if client.login():
         health_data = []
+        dates_to_sync = []
         today = datetime.now()
-        for i in range(14):
-            date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-            logging.info(f"Sincronizando dados de saúde: {date_str}")
+        
+        if start_date:
+            current = start_date
+            while current <= today:
+                dates_to_sync.append(current.strftime("%Y-%m-%d"))
+                current += timedelta(days=1)
+        elif days:
+            for i in range(days):
+                dates_to_sync.append((today - timedelta(days=i)).strftime("%Y-%m-%d"))
+        else:
+            for i in range(3):
+                dates_to_sync.append((today - timedelta(days=i)).strftime("%Y-%m-%d"))
+
+        file_path = os.path.join("data", "saude_cloud.csv")
+        existing_df = pd.DataFrame()
+        if os.path.exists(file_path):
+            existing_df = pd.read_csv(file_path)
+
+        for date_str in dates_to_sync:
+            logging.info(f"Sincronizando: {date_str}")
             day_data = client.get_daily_stats(date_str)
             if day_data:
                 health_data.append(day_data)
 
-        df_health = pd.DataFrame(health_data)
-        df_health.to_csv("saude_cloud.csv", index=False)
-        logging.info("Sincronização em nuvem concluída com sucesso!")
-
+        if health_data:
+            df_new = pd.DataFrame(health_data)
+            if not existing_df.empty:
+                df_final = pd.concat([df_new, existing_df]).drop_duplicates(subset=['date'], keep='first')
+            else:
+                df_final = df_new
+            os.makedirs("data", exist_ok=True)
+            df_final.sort_values('date', ascending=False).to_csv(file_path, index=False)
+        
+        profile = client.get_user_info()
+        with open(os.path.join("data", "profile.json"), "w") as f:
+            json.dump(profile, f)
+        logging.info("Sincronização concluída.")
+        return profile
+    return None
 
 if __name__ == "__main__":
-    run_cloud_sync()
+    run_cloud_sync(days=14)
