@@ -194,7 +194,7 @@ class GarminCloudClient:
             logging.error(f"Erro ao buscar atividades: {e}")
             return []
 
-def run_cloud_sync(start_date=None, days=None):
+def run_cloud_sync(start_date=None, days=None, act_limit=50):
     """Executa o fluxo de sincronização."""
     client = GarminCloudClient()
     if client.login():
@@ -205,6 +205,8 @@ def run_cloud_sync(start_date=None, days=None):
         # Datas para Saúde
         if start_date:
             current = start_date
+            if isinstance(current, str):
+                current = datetime.strptime(current, "%Y-%m-%d")
             while current <= today:
                 dates_to_sync.append(current.strftime("%Y-%m-%d"))
                 current += timedelta(days=1)
@@ -239,9 +241,9 @@ def run_cloud_sync(start_date=None, days=None):
                 df_final = df_new
             df_final.sort_values('date', ascending=False).to_csv(health_file, index=False)
         
-        # Sincronização de Atividades (Últimas 50)
-        logging.info("Sincronizando Atividades...")
-        activities_data = client.get_activities(limit=50)
+        # Sincronização de Atividades
+        logging.info(f"Sincronizando Atividades (limite: {act_limit})...")
+        activities_data = client.get_activities(limit=act_limit)
         if activities_data:
             activities_file = os.path.join(data_dir, "atividades_cloud.csv")
             df_act = pd.DataFrame(activities_data)
